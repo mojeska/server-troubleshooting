@@ -1,6 +1,7 @@
 # Server troubleshooting with PowerShell
 
 Commands I use day to day on Windows servers. Works in Windows PowerShell 5.1; most work in 7.x too.
+PowerShell first. The `# OldSchool:` line under a block is the cmd-era equivalent (`netstat`, `ipconfig`, `nltest`...).
 AD-specific stuff is in [ad-troubleshooting](https://github.com/mojeska/ad-troubleshooting).
 
 Most examples run against a list of servers:
@@ -21,6 +22,7 @@ Check WinRM is answering:
 
 ```powershell
 Test-WSMan app01
+# OldSchool: winrm id -r:app01
 ```
 
 Interactive session on one server:
@@ -55,6 +57,7 @@ Restart a group, all at once:
 
 ```powershell
 Restart-Computer -ComputerName $servers -Force
+# OldSchool: shutdown /r /f /t 0 /m \\app01
 ```
 
 Restart one at a time and wait until each is back (PowerShell remoting answering) before the next. Use for app tiers or clusters:
@@ -70,6 +73,7 @@ Shut down:
 
 ```powershell
 Stop-Computer -ComputerName $servers -Force
+# OldSchool: shutdown /s /f /t 0 /m \\app01
 ```
 
 Who's logged on before you reboot (`quser` shows RDP sessions too, which CIM doesn't):
@@ -83,6 +87,7 @@ Who or what restarted it (1074 = planned with reason, 6008 = unexpected, 41 = lo
 ```powershell
 Get-WinEvent -ComputerName app01 -FilterHashtable @{ LogName = 'System'; Id = 1074, 6008, 41 } -MaxEvents 10 |
     Select-Object TimeCreated, Id, Message
+# OldSchool: wevtutil qe System /q:"*[System[(EventID=1074)]]" /c:10 /rd:true /f:text /r:app01
 ```
 
 ---
@@ -96,6 +101,7 @@ Invoke-Command -ComputerName $servers -ScriptBlock {
     $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
     [pscustomobject]@{ LastBoot = $boot; UptimeDays = [math]::Round(((Get-Date) - $boot).TotalDays, 1) }
 } | Select-Object PSComputerName, LastBoot, UptimeDays
+# OldSchool: systeminfo /s app01 | findstr /c:"Boot Time"
 ```
 
 ### Pending reboot
@@ -118,12 +124,14 @@ Automatic services that aren't running:
 Invoke-Command -ComputerName $servers -ScriptBlock {
     Get-CimInstance Win32_Service -Filter "StartMode='Auto' AND State<>'Running'" | Select-Object Name, DisplayName, State
 } | Select-Object PSComputerName, Name, DisplayName, State
+# OldSchool: sc \\app01 query state= inactive
 ```
 
 Restart a service on several servers:
 
 ```powershell
 Invoke-Command -ComputerName $servers -ScriptBlock { Restart-Service Spooler -Force }
+# OldSchool: sc \\app01 stop Spooler && sc \\app01 start Spooler
 ```
 
 Services running under a named account (the ones that break when a password changes):
@@ -141,6 +149,7 @@ Top 10 by CPU, with memory:
 ```powershell
 Get-Process | Sort-Object CPU -Descending | Select-Object -First 10 Name, Id, CPU,
     @{ n = 'MemMB'; e = { [int]($_.WorkingSet64 / 1MB) } }
+# OldSchool: tasklist /s app01 /v
 ```
 
 Who owns each process (run elevated):
@@ -153,6 +162,7 @@ Kill a hung process on a remote server:
 
 ```powershell
 Invoke-Command -ComputerName app01 -ScriptBlock { Stop-Process -Name w3wp -Force }
+# OldSchool: taskkill /s app01 /im w3wp.exe /f
 ```
 
 ### Disk
@@ -166,6 +176,7 @@ Get-CimInstance Win32_LogicalDisk -ComputerName $servers -Filter 'DriveType=3' |
         @{ n = 'FreeGB'; e = { [math]::Round($_.FreeSpace / 1GB, 1) } },
         @{ n = 'FreePct'; e = { [int](100 * $_.FreeSpace / $_.Size) } } |
     Sort-Object FreePct
+# OldSchool: fsutil volume diskfree C:
 ```
 
 Biggest folders under a path (slow on big drives):
@@ -193,6 +204,7 @@ Get-Counter -ComputerName app01 -SampleInterval 2 -MaxSamples 5 -Counter @(
     '\Memory\Available MBytes'
     '\LogicalDisk(_Total)\Avg. Disk Queue Length'
 )
+# OldSchool: typeperf "\Processor(_Total)\% Processor Time" -s app01 -si 2 -sc 5
 ```
 
 ### Event logs
@@ -203,6 +215,7 @@ Errors and criticals from the last 24 hours:
 Get-WinEvent -ComputerName app01 -FilterHashtable @{
     LogName = 'System', 'Application'; Level = 1, 2; StartTime = (Get-Date).AddHours(-24)
 } | Select-Object TimeCreated, LogName, ProviderName, Id, Message
+# OldSchool: wevtutil qe System /q:"*[System[(Level=1 or Level=2)]]" /c:50 /rd:true /f:text /r:app01
 ```
 
 One event ID across servers:
@@ -222,6 +235,7 @@ Get-ScheduledTask | Where-Object TaskPath -notlike '\Microsoft\*' | ForEach-Obje
     $info = $_ | Get-ScheduledTaskInfo
     [pscustomobject]@{ Task = $_.TaskName; State = $_.State; LastRun = $info.LastRunTime; Result = $info.LastTaskResult; NextRun = $info.NextRunTime }
 }
+# OldSchool: schtasks /query /s app01 /fo LIST /v
 ```
 
 ### Installed software
@@ -242,12 +256,14 @@ Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
 
 ```powershell
 foreach ($s in $servers) { [pscustomobject]@{ Server = $s; Up = Test-Connection $s -Count 1 -Quiet } }
+# OldSchool: ping -n 1 app01
 ```
 
 ### Is a port open?
 
 ```powershell
 Test-NetConnection sql01 -Port 1433
+# OldSchool: telnet sql01 1433   (Telnet Client feature) or: portqry -n sql01 -e 1433
 ```
 
 Many servers and ports. Test-NetConnection is slow on closed ports, so this uses a 1-second timeout:
@@ -267,6 +283,7 @@ Trace route:
 
 ```powershell
 Test-NetConnection app01 -TraceRoute
+# OldSchool: tracert app01
 ```
 
 ### Connections (netstat)
@@ -276,6 +293,7 @@ What's listening, with the process name:
 ```powershell
 Get-NetTCPConnection -State Listen | Sort-Object LocalPort | Select-Object LocalAddress, LocalPort,
     @{ n = 'Process'; e = { (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName } }, OwningProcess
+# OldSchool: netstat -ano | findstr LISTENING     (add -b, elevated, for process names)
 ```
 
 Established connections and who's on the other end:
@@ -283,6 +301,7 @@ Established connections and who's on the other end:
 ```powershell
 Get-NetTCPConnection -State Established | Select-Object LocalPort, RemoteAddress, RemotePort,
     @{ n = 'Process'; e = { (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName } }
+# OldSchool: netstat -ano | findstr ESTABLISHED
 ```
 
 Who's connected to RDP, or to one remote address:
@@ -290,12 +309,14 @@ Who's connected to RDP, or to one remote address:
 ```powershell
 Get-NetTCPConnection -LocalPort 3389 -State Established
 Get-NetTCPConnection -RemoteAddress 10.1.2.3
+# OldSchool: netstat -an | findstr :3389
 ```
 
 UDP listeners:
 
 ```powershell
 Get-NetUDPEndpoint | Sort-Object LocalPort | Select-Object LocalAddress, LocalPort, OwningProcess
+# OldSchool: netstat -ano -p UDP
 ```
 
 ### IP, DNS and routes
@@ -304,6 +325,7 @@ Get-NetUDPEndpoint | Sort-Object LocalPort | Select-Object LocalAddress, LocalPo
 Get-NetIPConfiguration                               # IP, gateway, DNS per adapter
 Get-DnsClientServerAddress -AddressFamily IPv4       # DNS servers in use
 Get-NetRoute -DestinationPrefix '0.0.0.0/0'          # default gateway(s)
+# OldSchool: ipconfig /all  and  route print
 ```
 
 Look up a name against a specific DNS server, and clear the cache:
@@ -311,6 +333,7 @@ Look up a name against a specific DNS server, and clear the cache:
 ```powershell
 Resolve-DnsName app01.contoso.com -Server 10.0.0.10
 Clear-DnsClientCache
+# OldSchool: nslookup app01.contoso.com 10.0.0.10  and  ipconfig /flushdns
 ```
 
 ### File shares and open files
@@ -320,12 +343,14 @@ Who's connected, and who has a file locked:
 ```powershell
 Get-SmbSession -CimSession fs01 | Select-Object ClientComputerName, ClientUserName, NumOpens
 Get-SmbOpenFile -CimSession fs01 | Where-Object Path -like '*budget.xlsx' | Select-Object ClientUserName, ClientComputerName, Path
+# OldSchool: net session  (run on fs01)  and  openfiles /query /s fs01
 ```
 
 Close it:
 
 ```powershell
 Get-SmbOpenFile -CimSession fs01 | Where-Object Path -like '*budget.xlsx' | Close-SmbOpenFile -Force
+# OldSchool: openfiles /disconnect /s fs01 /op "budget.xlsx" /a *
 ```
 
 Shares and their permissions:
@@ -333,6 +358,7 @@ Shares and their permissions:
 ```powershell
 Get-SmbShare -CimSession fs01 | Where-Object Name -notlike '*$'
 Get-SmbShareAccess -CimSession fs01 -Name Data
+# OldSchool: net share  (run on fs01)
 ```
 
 ---
@@ -347,6 +373,7 @@ Is the adapter on DHCP, and what did it get:
 Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, IPAddress, PrefixOrigin
 Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=TRUE AND DHCPEnabled=TRUE' |
     Select-Object Description, IPAddress, DHCPServer, DHCPLeaseObtained, DHCPLeaseExpires
+# OldSchool: ipconfig /all
 ```
 
 Release and renew:
@@ -355,6 +382,7 @@ Release and renew:
 $nic = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=TRUE AND DHCPEnabled=TRUE'
 $nic | Invoke-CimMethod -MethodName ReleaseDHCPLease
 $nic | Invoke-CimMethod -MethodName RenewDHCPLease
+# OldSchool: ipconfig /release  then  ipconfig /renew
 ```
 
 A `169.254.x.x` address means no DHCP server answered. Check the VLAN, the IP helper on the switch, and the scope.
@@ -366,6 +394,7 @@ Scopes and how full they are:
 ```powershell
 Get-DhcpServerv4Scope -ComputerName dhcp01 | Select-Object ScopeId, Name, State, StartRange, EndRange, LeaseDuration
 Get-DhcpServerv4ScopeStatistics -ComputerName dhcp01 | Select-Object ScopeId, Free, InUse, PercentageInUse | Sort-Object PercentageInUse -Descending
+# OldSchool: netsh dhcp server \\dhcp01 show scope
 ```
 
 Find a lease by IP, MAC or name:
@@ -381,6 +410,7 @@ Reservations, and adding one:
 ```powershell
 Get-DhcpServerv4Reservation -ComputerName dhcp01 -ScopeId 10.20.30.0
 Add-DhcpServerv4Reservation -ComputerName dhcp01 -ScopeId 10.20.30.0 -IPAddress 10.20.30.50 -ClientId '00-15-5d-01-02-03' -Name 'printer-2f'
+# OldSchool: netsh dhcp server \\dhcp01 scope 10.20.30.0 show reservedip
 ```
 
 Scope options (gateway, DNS, domain):
@@ -418,6 +448,7 @@ Select-String -Path \\dhcp01\c$\Windows\System32\dhcp\DhcpSrvLog-Tue.log -Patter
 $env:LOGONSERVER                                                                  # DC that logged the current user on
 [DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain().FindDomainController().Name   # DC it finds now (no RSAT needed)
 Get-ADDomainController -Discover | Select-Object Name, Site                       # same, with RSAT
+# OldSchool: nltest /dsgetdc:contoso.com  and  echo %LOGONSERVER%
 ```
 
 On a remote machine:
@@ -428,7 +459,7 @@ Invoke-Command -ComputerName app01 -ScriptBlock {
 }
 ```
 
-The DC the secure channel is on has no PowerShell equivalent: `nltest /sc_query:contoso.com`.
+The DC the secure channel is on (no PowerShell equivalent): `nltest /sc_query:contoso.com`.
 
 ### Can it reach a DC?
 
@@ -439,6 +470,7 @@ Resolve-DnsName _ldap._tcp.dc._msdcs.contoso.com -Type SRV
 foreach ($p in 88, 135, 389, 445, 3268) {
     [pscustomobject]@{ Port = $p; Open = Test-NetConnection dc01 -Port $p -InformationLevel Quiet -WarningAction SilentlyContinue }
 }
+# OldSchool: nslookup -type=SRV _ldap._tcp.dc._msdcs.contoso.com
 ```
 
 ### "The trust relationship between this workstation and the primary domain failed"
@@ -451,18 +483,21 @@ Check:
 
 ```powershell
 Test-ComputerSecureChannel -Verbose
+# OldSchool: nltest /sc_verify:contoso.com
 ```
 
 Repair without rejoining (no reboot needed):
 
 ```powershell
 Test-ComputerSecureChannel -Repair -Credential contoso\admin
+# OldSchool: nltest /sc_reset:contoso.com
 ```
 
 If that fails, reset the machine password against a specific DC:
 
 ```powershell
 Reset-ComputerMachinePassword -Server dc01 -Credential contoso\admin
+# OldSchool: netdom resetpwd /server:dc01 /userd:contoso\admin /passwordd:*
 ```
 
 Last resort, rejoin. Moves it to a workgroup and back, with two reboots. The computer object
@@ -472,6 +507,7 @@ and its group memberships are kept:
 Remove-Computer -UnjoinDomainCredential contoso\admin -WorkgroupName TEMP -Force -Restart
 # after the reboot, as local admin:
 Add-Computer -DomainName contoso.com -Credential contoso\admin -Restart
+# OldSchool: netdom remove / netdom join (or System Properties > Computer Name)
 ```
 
 ### Cached credentials
@@ -492,6 +528,7 @@ Profiles on or off:
 
 ```powershell
 Get-NetFirewallProfile | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction
+# OldSchool: netsh advfirewall show allprofiles state
 ```
 
 Enabled inbound allow rules with their ports:
@@ -501,6 +538,7 @@ Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow | ForEach-Obj
     $pf = $_ | Get-NetFirewallPortFilter
     [pscustomobject]@{ Rule = $_.DisplayName; Profile = $_.Profile; Protocol = $pf.Protocol; Port = $pf.LocalPort -join ',' }
 } | Sort-Object Rule
+# OldSchool: netsh advfirewall firewall show rule name=all dir=in
 ```
 
 Which rule covers a port:
@@ -513,6 +551,7 @@ Open a port:
 
 ```powershell
 New-NetFirewallRule -DisplayName 'SQL 1433' -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow -Profile Domain
+# OldSchool: netsh advfirewall firewall add rule name="SQL 1433" dir=in action=allow protocol=TCP localport=1433 profile=domain
 ```
 
 ### Patches
@@ -521,6 +560,7 @@ Last 10 updates installed:
 
 ```powershell
 Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 10 HotFixID, Description, InstalledOn
+# OldSchool: systeminfo | findstr KB
 ```
 
 Last patch date across servers:
@@ -542,6 +582,7 @@ Get-HotFix -Id KB5044281 -ComputerName app01 -ErrorAction SilentlyContinue
 ```powershell
 Invoke-Command -ComputerName $servers -ScriptBlock { Get-LocalGroupMember Administrators } |
     Select-Object PSComputerName, Name, ObjectClass, PrincipalSource
+# OldSchool: net localgroup administrators
 ```
 
 `Get-LocalGroupMember` fails if the group holds an orphaned SID. Fall back to `net localgroup administrators`.
@@ -571,6 +612,7 @@ Machine certificates expiring in the next 60 days:
 Invoke-Command -ComputerName $servers -ScriptBlock {
     Get-ChildItem Cert:\LocalMachine\My | Where-Object NotAfter -lt (Get-Date).AddDays(60)
 } | Select-Object PSComputerName, Subject, NotAfter, Thumbprint
+# OldSchool: certutil -store My
 ```
 
 ### Defender and BitLocker
@@ -590,6 +632,7 @@ Component store health and repair (the DISM PowerShell module), then a system fi
 Repair-WindowsImage -Online -ScanHealth
 Repair-WindowsImage -Online -RestoreHealth
 sfc /scannow          # no PowerShell equivalent
+# OldSchool: Dism /Online /Cleanup-Image /ScanHealth  and  /RestoreHealth
 ```
 
 Windows Update log (writes WindowsUpdate.log to the desktop):
